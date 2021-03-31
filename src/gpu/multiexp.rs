@@ -220,14 +220,16 @@ where
 impl<E> MultiexpKernel<E>
 where
     E: Engine,
-{
+{   // Modified by long 20210305
     pub fn create(priority: bool) -> GPUResult<MultiexpKernel<E>> {
         let lock = locks::GPULock::lock();
+        let id = lock.id();
 
         let devices = opencl::Device::all()?;
 
         let kernels: Vec<_> = devices
             .into_iter()
+            .filter(| d | d.bus_id() ==  id ) // Added by long 20210305
             .map(|d| (d.clone(), SingleMultiexpKernel::<E>::create(d, priority)))
             .filter_map(|(device, res)| {
                 if let Err(ref e) = res {
@@ -249,10 +251,11 @@ where
             kernels.len(),
             get_cpu_utilization()
         );
-        for (i, k) in kernels.iter().enumerate() {
+        // for (i, k) in kernels.iter().enumerate() {
+        for (_, k) in kernels.iter().enumerate() { // Modified by long 20210305
             info!(
                 "Multiexp: Device {}: {} (Chunk-size: {})",
-                i,
+                k.program.device().bus_id(), // i, // Modified by long 20210305
                 k.program.device().name(),
                 k.n
             );
