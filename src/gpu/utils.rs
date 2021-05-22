@@ -13,6 +13,7 @@ lazy_static::lazy_static! {
 
             // NVIDIA
             ("Quadro RTX 6000".to_string(), 4608),
+            ("Quadro RTX A6000".to_string(), 10752),
 
             ("TITAN RTX".to_string(), 4608),
 
@@ -74,7 +75,7 @@ pub fn get_core_count(d: &opencl::Device) -> usize {
 }
 
 pub fn dump_device_list() {
-    for d in opencl::Device::all().unwrap() {
+    for d in opencl::Device::all() {
         info!("Device: {:?}", d);
     }
 }

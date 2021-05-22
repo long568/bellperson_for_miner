@@ -15,7 +15,9 @@ use crate::multiexp::{multiexp, DensityTracker, FullDensity};
 use crate::{
     Circuit, ConstraintSystem, Index, LinearCombination, SynthesisError, Variable, BELLMAN_VERSION,
 };
-use log::{info, trace};
+use log::info;
+#[cfg(feature = "gpu")]
+use log::trace;
 
 #[cfg(feature = "gpu")]
 use crate::gpu::PriorityLock;
@@ -282,7 +284,7 @@ where
     // multiexp calculations. This is what the `Worker` is used for. It is important that calling
     // `wait()` on the worker happens *outside* the thread pool, else deadlocks can happen.
     let worker = Worker::new();
-    let input_len = provers[0].input_assignment.len();
+    let input_len = input_assignments[0].len();
     let vk = params.get_vk(input_len)?.clone();
     let n = provers[0].a.len();
 

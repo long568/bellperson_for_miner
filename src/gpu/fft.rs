@@ -31,7 +31,7 @@ where
         let lock = locks::GPULock::lock();
         let id = lock.id();
 
-        let devices = opencl::Device::all()?;
+        let devices = opencl::Device::all();
         if devices.is_empty() {
             return Err(GPUError::Simple("No working GPUs found!"));
         }
@@ -85,18 +85,17 @@ where
             global_work_size as usize,
             Some(local_work_size as usize),
         );
-        call_kernel!(
-            kernel,
-            src_buffer,
-            dst_buffer,
-            &self.pq_buffer,
-            &self.omegas_buffer,
-            opencl::LocalBuffer::<E::Fr>::new(1 << deg),
-            n,
-            log_p,
-            deg,
-            max_deg
-        )?;
+        kernel
+            .arg(src_buffer)
+            .arg(dst_buffer)
+            .arg(&self.pq_buffer)
+            .arg(&self.omegas_buffer)
+            .arg(opencl::LocalBuffer::<E::Fr>::new(1 << deg))
+            .arg(n)
+            .arg(log_p)
+            .arg(deg)
+            .arg(max_deg)
+            .run()?;
         Ok(())
     }
 
