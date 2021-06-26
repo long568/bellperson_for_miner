@@ -42,9 +42,9 @@ impl GPULock {
         // debug!("GPU lock acquired!");
         // GPULock(f)
         loop{
-            let devs = opencl::Device::all().unwrap();
+            let devs = opencl::Device::all();
             for dev in devs {
-                let id = dev.bus_id();
+                let id = dev.bus_id().unwrap();
                 let lock = gpu_lock_path(GPU_LOCK_NAME, id);
                 let lock = File::create(&lock)
                     .unwrap_or_else(|_| panic!("Cannot create GPU lock file at {:?}", &lock));
@@ -83,9 +83,9 @@ impl PriorityLock {
         // debug!("Priority lock acquired!");
         // PriorityLock(f)
         loop{
-            let devs = opencl::Device::all().unwrap();
+            let devs = opencl::Device::all();
             for dev in devs {
-                let id = dev.bus_id();
+                let id = dev.bus_id().unwrap();
                 let f = gpu_lock_path(PRIORITY_LOCK_NAME, id);
                 let f = File::create(&f)
                     .unwrap_or_else(|_| panic!("Cannot create Priority lock file at {:?}", &f));
@@ -113,9 +113,9 @@ impl PriorityLock {
             //     .is_err()
             && {
                 let mut r = true;
-                let devs = opencl::Device::all().unwrap();
+                let devs = opencl::Device::all();
                 for dev in devs {
-                    let id = dev.bus_id();
+                    let id = dev.bus_id().unwrap();
                     let f = gpu_lock_path(PRIORITY_LOCK_NAME, id);
                     let f = File::create(&f)
                         .unwrap_or_else(|_| panic!("Cannot create Priority lock file at {:?}", &f));

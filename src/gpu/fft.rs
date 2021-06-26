@@ -38,7 +38,7 @@ where
 
         // Select the first device for FFT
         // let device = devices[0].clone();
-        let device = devices.iter().filter(|d| d.bus_id() == id).next().unwrap().clone();
+        let device = devices.into_iter().filter(|d| d.bus_id().unwrap() == id).next().unwrap().clone();
 
         let src = sources::kernel::<E>(device.brand() == opencl::Brand::Nvidia);
 

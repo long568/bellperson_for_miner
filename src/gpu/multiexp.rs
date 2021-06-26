@@ -228,7 +228,7 @@ where
 
         let kernels: Vec<_> = devices
             .into_iter()
-            .filter(| d | d.bus_id() ==  id ) // Added by long 20210305
+            .filter(| d | d.bus_id().unwrap() ==  id ) // Added by long 20210305
             .map(|d| (d, SingleMultiexpKernel::<E>::create(d.clone(), priority)))
             .filter_map(|(device, res)| {
                 if let Err(ref e) = res {
@@ -254,7 +254,7 @@ where
         for (_, k) in kernels.iter().enumerate() { // Modified by long 20210305
             info!(
                 "Multiexp: Device {}: {} (Chunk-size: {})",
-                k.program.device().bus_id(), // i, // Modified by long 20210305
+                k.program.device().bus_id().unwrap(), // i, // Modified by long 20210305
                 k.program.device().name(),
                 k.n
             );
