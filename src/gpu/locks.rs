@@ -27,6 +27,7 @@ fn gpu_lock_path(filename: &str, bus_id: u32) -> PathBuf {
 }
 
 /// `GPULock` prevents two kernel objects to be instantiated simultaneously.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
 pub struct GPULock(File, u32);
 impl GPULock {
@@ -144,6 +145,7 @@ use crate::multiexp::create_multiexp_kernel;
 
 macro_rules! locked_kernel {
     ($class:ident, $kern:ident, $func:ident, $name:expr) => {
+        #[allow(clippy::upper_case_acronyms)]
         pub struct $class<E>
         where
             E: Engine,
