@@ -11,7 +11,7 @@ parameters:
 executors:
   default:
     machine:
-      image: ubuntu-1604-cuda-10.1:201909-23
+      image: ubuntu-2004-cuda-11.2:202103-01
     working_directory: ~/gpuci
     resource_class: gpu.nvidia.medium
 
@@ -40,6 +40,7 @@ commands:
       - run:
           name: Install libraries for GPU tests
           command: |
+            sudo apt update
             sudo apt-get update -y
             sudo apt install -y ocl-icd-opencl-dev
 
@@ -90,6 +91,21 @@ commands:
           name: Test blst (GPU) (<< parameters.target >>)
           command: TARGET=<< parameters.target >> cargo test --release --no-default-features --features gpu,blst
           no_output_timeout: 30m
+
+  test_target_blst_ignored:
+    parameters:
+      target:
+        type: string
+    steps:
+      - *restore-workspace
+      - *restore-cache
+      - run:
+          name: Test blst ignored (<< parameters.target >>)
+          command: TARGET=<< parameters.target >> cargo test --release --no-default-features --features blst -- --ignored
+          no_output_timeout: 30m
+      - run:
+          name: Show results
+          command: cat aggregation.csv
 
 jobs:
 
@@ -161,6 +177,14 @@ jobs:
       - set-env-path
       - install-gpu-deps
       - test_target_blst_gpu:
+          target: "x86_64-unknown-linux-gnu"
+
+  test_blst_ignored_x86_64-unknown-linux-gnu:
+    executor: default
+    steps:
+      - set-env-path
+      - install-gpu-deps
+      - test_target_blst_ignored:
           target: "x86_64-unknown-linux-gnu"
 
   rustfmt:
@@ -268,6 +292,9 @@ workflows:
           requires:
             - cargo_fetch
       - test_blst_gpu_x86_64-unknown-linux-gnu:
+          requires:
+            - cargo_fetch
+      - test_blst_ignored_x86_64-unknown-linux-gnu:
           requires:
             - cargo_fetch
 
