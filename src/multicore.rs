@@ -1,39 +1,42 @@
 //! An interface for dealing with the kinds of parallel computations involved in
-//! `bellperson`. It's currently just a thin wrapper around [`CpuPool`] and
-//! [`rayon`] but may be extended in the future to allow for various
-//! parallelism strategies.
-//!
-//! [`CpuPool`]: futures_cpupool::CpuPool
+//! `bellperson`.
+
+use std::env;
 
 use crossbeam_channel::{bounded, Receiver};
 use lazy_static::lazy_static;
-use log::{error, trace};
-use std::env;
-
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-static WORKER_SPAWN_COUNTER: AtomicUsize = AtomicUsize::new(0);
+use yastl::Pool;
 
 lazy_static! {
-    static ref NUM_CPUS: usize = if let Ok(num) = env::var("BELLMAN_NUM_CPUS") {
-        if let Ok(num) = num.parse() {
+    static ref NUM_CPUS: usize = read_num_cpus();
+    pub static ref THREAD_POOL: Pool = Pool::new(*NUM_CPUS);
+}
+
+fn read_num_cpus() -> usize {
+    match env::var("BELLMAN_NUM_CPUS")
+        .ok()
+        .and_then(|num| num.parse::<usize>().ok())
+    {
+        Some(num) => {
+            log::warn!("BELLMAN_NUM_CPUS is deprecated, please switch to RAYON_NUM_THREADS");
+            // proxy to RAYON_NUM_THREAS for now
+            env::set_var("RAYON_NUM_THREADS", num.to_string());
+
             num
-        } else {
-            num_cpus::get()
         }
-    } else {
-        num_cpus::get()
-    };
-    // See Worker::compute below for a description of this.
-    static ref WORKER_SPAWN_MAX_COUNT: usize = *NUM_CPUS * 4;
-    pub static ref THREAD_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-        .num_threads(*NUM_CPUS)
-        .build()
-        .unwrap();
-    pub static ref VERIFIER_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-        .num_threads(NUM_CPUS.max(6))
-        .build()
-        .unwrap();
+        None => {
+            match env::var("RAYON_NUM_THREADS")
+                .ok()
+                .and_then(|num| num.parse().ok())
+            {
+                Some(num) => {
+                    // rayon defaults to the same value as num_cpus::get
+                    num
+                }
+                None => num_cpus::get(),
+            }
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -55,52 +58,17 @@ impl Worker {
     {
         let (sender, receiver) = bounded(1);
 
-        let thread_index = if THREAD_POOL.current_thread_index().is_some() {
-            THREAD_POOL.current_thread_index().unwrap()
-        } else {
-            0
-        };
-
-        // We keep track here of how many times spawn has been called.
-        // It can be called without limit, each time, putting a
-        // request for a new thread to execute a method on the
-        // ThreadPool.  However, if we allow it to be called without
-        // limits, we run the risk of memory exhaustion due to limited
-        // stack space consumed by all of the pending closures to be
-        // executed.
-        let previous_count = WORKER_SPAWN_COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        // If the number of spawns requested has exceeded the number
-        // of cores available for processing by some factor (the
-        // default being 4), instead of requesting that we spawn a new
-        // thread, we instead execute the closure in the context of an
-        // install call to help clear the growing work queue and
-        // minimize the chances of memory exhaustion.
-        if previous_count > *WORKER_SPAWN_MAX_COUNT {
-            THREAD_POOL.install(move || {
-                trace!("[{}] switching to install to help clear backlog[current threads {}, threads requested {}]",
-                       thread_index,
-                       THREAD_POOL.current_num_threads(),
-                       WORKER_SPAWN_COUNTER.load(Ordering::SeqCst));
-                let res = f();
-                sender.send(res).unwrap();
-                WORKER_SPAWN_COUNTER.fetch_sub(1, Ordering::SeqCst);
-            });
-        } else {
-            THREAD_POOL.spawn(move || {
-                let res = f();
-                sender.send(res).unwrap();
-                WORKER_SPAWN_COUNTER.fetch_sub(1, Ordering::SeqCst);
-            });
-        }
+        THREAD_POOL.spawn(move || {
+            let res = f();
+            sender.send(res).unwrap();
+        });
 
         Waiter { receiver }
     }
 
     pub fn scope<'a, F, R>(&self, elements: usize, f: F) -> R
     where
-        F: FnOnce(&rayon::Scope<'a>, usize) -> R + Send,
-        R: Send,
+        F: FnOnce(&yastl::Scope<'a>, usize) -> R,
     {
         let chunk_size = if elements < *NUM_CPUS {
             1
@@ -108,7 +76,21 @@ impl Worker {
             elements / *NUM_CPUS
         };
 
-        THREAD_POOL.scope(|scope| f(scope, chunk_size))
+        THREAD_POOL.scoped(|scope| f(scope, chunk_size))
+    }
+
+    /// Executes the passed in function, and returns the result once it is finished.
+    pub fn scoped<'a, F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&yastl::Scope<'a>) -> R,
+    {
+        let (sender, receiver) = bounded(1);
+        THREAD_POOL.scoped(|s| {
+            let res = f(s);
+            sender.send(res).unwrap();
+        });
+
+        receiver.recv().unwrap()
     }
 }
 
@@ -119,11 +101,6 @@ pub struct Waiter<T> {
 impl<T> Waiter<T> {
     /// Wait for the result.
     pub fn wait(&self) -> T {
-        if THREAD_POOL.current_thread_index().is_some() {
-            // Calling `wait()` from within the worker thread pool can lead to dead logs
-            error!("The wait call should never be done inside the worker thread pool");
-            debug_assert!(false);
-        }
         self.receiver.recv().unwrap()
     }
 
@@ -150,7 +127,59 @@ fn log2_floor(num: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::env::{self, VarError};
+    use std::panic::{self, RefUnwindSafe, UnwindSafe};
+    use std::sync::Mutex;
+
     use super::*;
+
+    lazy_static! {
+        static ref SERIAL_TEST: Mutex<()> = Default::default();
+    }
+
+    /// Sets environment variables to the given value for the duration of the closure.
+    /// Restores the previous values when the closure completes or panics, before unwinding the panic.
+    pub fn with_env_vars<F>(kvs: Vec<(&str, Option<&str>)>, closure: F)
+    where
+        F: Fn() + UnwindSafe + RefUnwindSafe,
+    {
+        let guard = SERIAL_TEST.lock().unwrap();
+        let mut old_kvs: Vec<(&str, Result<String, VarError>)> = Vec::new();
+        for (k, v) in kvs {
+            let old_v = env::var(k);
+            old_kvs.push((k, old_v));
+            match v {
+                None => env::remove_var(k),
+                Some(v) => env::set_var(k, v),
+            }
+        }
+
+        match panic::catch_unwind(|| {
+            closure();
+        }) {
+            Ok(_) => {
+                for (k, v) in old_kvs {
+                    reset_env(k, v);
+                }
+            }
+            Err(err) => {
+                for (k, v) in old_kvs {
+                    reset_env(k, v);
+                }
+                drop(guard);
+                panic::resume_unwind(err);
+            }
+        };
+    }
+
+    fn reset_env(k: &str, old: Result<String, VarError>) {
+        if let Ok(v) = old {
+            env::set_var(k, v);
+        } else {
+            env::remove_var(k);
+        }
+    }
+
     #[test]
     fn test_log2_floor() {
         assert_eq!(log2_floor(1), 0);
@@ -160,5 +189,43 @@ mod tests {
         assert_eq!(log2_floor(6), 2);
         assert_eq!(log2_floor(7), 2);
         assert_eq!(log2_floor(8), 3);
+    }
+
+    #[test]
+    fn test_read_num_cpus() {
+        // use bellman if set
+        with_env_vars(
+            vec![("BELLMAN_NUM_CPUS", Some("6")), ("RAYON_NUM_THREADS", None)],
+            || {
+                assert_eq!(read_num_cpus(), 6);
+            },
+        );
+
+        // bellman has priority over rayon
+        with_env_vars(
+            vec![
+                ("BELLMAN_NUM_CPUS", Some("6")),
+                ("RAYON_NUM_THREADS", Some("7")),
+            ],
+            || {
+                assert_eq!(read_num_cpus(), 6);
+            },
+        );
+
+        // use rayon if set, if bellman is not
+        with_env_vars(
+            vec![("BELLMAN_NUM_CPUS", None), ("RAYON_NUM_THREADS", Some("7"))],
+            || {
+                assert_eq!(read_num_cpus(), 7);
+            },
+        );
+
+        // use num cpus if none is set
+        with_env_vars(
+            vec![("BELLMAN_NUM_CPUS", None), ("RAYON_NUM_THREADS", None)],
+            || {
+                assert_eq!(read_num_cpus(), num_cpus::get());
+            },
+        );
     }
 }
