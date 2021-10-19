@@ -1,17 +1,15 @@
 //! Helpers for testing circuit implementations.
 
-use ff::{Field, PrimeField, PrimeFieldRepr, ScalarEngine};
-
-use crate::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
-
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use byteorder::{BigEndian, ByteOrder};
-use std::cmp::Ordering;
-use std::collections::BTreeMap;
-
 use blake2s_simd::{Params as Blake2sParams, State as Blake2sState};
+use byteorder::{BigEndian, ByteOrder};
+use ff::PrimeField;
+
+use crate::{ConstraintSystem, Index, LinearCombination, SynthesisError, Variable};
 
 #[derive(Debug)]
 enum NamedObject {
@@ -22,17 +20,17 @@ enum NamedObject {
 
 /// Constraint system for testing purposes.
 #[allow(clippy::type_complexity)]
-pub struct TestConstraintSystem<E: ScalarEngine> {
+pub struct TestConstraintSystem<Scalar: PrimeField> {
     named_objects: HashMap<String, NamedObject>,
     current_namespace: Vec<String>,
     constraints: Vec<(
-        LinearCombination<E>,
-        LinearCombination<E>,
-        LinearCombination<E>,
+        LinearCombination<Scalar>,
+        LinearCombination<Scalar>,
+        LinearCombination<Scalar>,
         String,
     )>,
-    inputs: Vec<(E::Fr, String)>,
-    aux: Vec<(E::Fr, String)>,
+    inputs: Vec<(Scalar, String)>,
+    aux: Vec<(Scalar, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -64,18 +62,20 @@ impl Ord for OrderedVariable {
     }
 }
 
-fn proc_lc<E: ScalarEngine>(terms: &LinearCombination<E>) -> BTreeMap<OrderedVariable, E::Fr> {
+fn proc_lc<Scalar: PrimeField>(
+    terms: &LinearCombination<Scalar>,
+) -> BTreeMap<OrderedVariable, Scalar> {
     let mut map = BTreeMap::new();
-    for (&var, &coeff) in terms.0.iter() {
+    for (var, &coeff) in terms.iter() {
         map.entry(OrderedVariable(var))
-            .or_insert_with(E::Fr::zero)
+            .or_insert_with(Scalar::zero)
             .add_assign(&coeff);
     }
 
     // Remove terms that have a zero coefficient to normalize
     let mut to_remove = vec![];
     for (var, coeff) in map.iter() {
-        if coeff.is_zero() {
+        if coeff.is_zero().into() {
             to_remove.push(*var)
         }
     }
@@ -87,8 +87,8 @@ fn proc_lc<E: ScalarEngine>(terms: &LinearCombination<E>) -> BTreeMap<OrderedVar
     map
 }
 
-fn hash_lc<E: ScalarEngine>(terms: &LinearCombination<E>, h: &mut Blake2sState) {
-    let map = proc_lc::<E>(terms);
+fn hash_lc<Scalar: PrimeField>(terms: &LinearCombination<Scalar>, h: &mut Blake2sState) {
+    let map = proc_lc::<Scalar>(terms);
 
     let mut buf = [0u8; 9 + 32];
     BigEndian::write_u64(&mut buf[0..8], map.len() as u64);
@@ -106,50 +106,49 @@ fn hash_lc<E: ScalarEngine>(terms: &LinearCombination<E>, h: &mut Blake2sState) 
             }
         }
 
-        coeff.into_repr().write_be(&mut buf[9..]).unwrap();
+        // Write as big-endian bytes.
+        let mut bytes = coeff.to_repr();
+        bytes.as_mut().reverse();
+        buf[9..].copy_from_slice(&bytes.as_ref());
 
         h.update(&buf);
     }
 }
 
-fn eval_lc<E: ScalarEngine>(
-    terms: &LinearCombination<E>,
-    inputs: &[(E::Fr, String)],
-    aux: &[(E::Fr, String)],
-) -> E::Fr {
-    let mut acc = E::Fr::zero();
+fn eval_lc<Scalar: PrimeField>(
+    terms: &LinearCombination<Scalar>,
+    inputs: &[(Scalar, String)],
+    aux: &[(Scalar, String)],
+) -> Scalar {
+    let mut acc = Scalar::zero();
 
-    for (&var, coeff) in terms.0.iter() {
+    for (var, coeff) in terms.iter() {
         let mut tmp = match var.get_unchecked() {
             Index::Input(index) => inputs[index].0,
             Index::Aux(index) => aux[index].0,
         };
 
-        tmp.mul_assign(&coeff);
+        tmp.mul_assign(coeff);
         acc.add_assign(&tmp);
     }
 
     acc
 }
 
-impl<E: ScalarEngine> TestConstraintSystem<E> {
+impl<Scalar: PrimeField> TestConstraintSystem<Scalar> {
     pub fn pretty_print(&self) -> String {
         let mut s = String::new();
 
-        let negone = {
-            let mut tmp = E::Fr::one();
-            tmp.negate();
-            tmp
-        };
+        let negone = -Scalar::one();
 
-        let powers_of_two = (0..E::Fr::NUM_BITS)
-            .map(|i| E::Fr::from_str("2").unwrap().pow(&[u64::from(i)]))
+        let powers_of_two = (0..Scalar::NUM_BITS)
+            .map(|i| Scalar::from(2u64).pow_vartime(&[u64::from(i)]))
             .collect::<Vec<_>>();
 
-        let pp = |s: &mut String, lc: &LinearCombination<E>| {
+        let pp = |s: &mut String, lc: &LinearCombination<Scalar>| {
             write!(s, "(").unwrap();
             let mut is_first = true;
-            for (var, coeff) in proc_lc::<E>(&lc) {
+            for (var, coeff) in proc_lc::<Scalar>(&lc) {
                 if coeff == negone {
                     write!(s, " - ").unwrap();
                 } else if !is_first {
@@ -157,7 +156,7 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
                 }
                 is_first = false;
 
-                if coeff != E::Fr::one() && coeff != negone {
+                if coeff != Scalar::one() && coeff != negone {
                     for (i, x) in powers_of_two.iter().enumerate() {
                         if x == &coeff {
                             write!(s, "2^{} . ", i).unwrap();
@@ -165,7 +164,7 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
                         }
                     }
 
-                    write!(s, "{} . ", coeff).unwrap();
+                    write!(s, "{:?} . ", coeff).unwrap();
                 }
 
                 match var.0.get_unchecked() {
@@ -212,9 +211,9 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
         }
 
         for constraint in &self.constraints {
-            hash_lc::<E>(&constraint.0, &mut h);
-            hash_lc::<E>(&constraint.1, &mut h);
-            hash_lc::<E>(&constraint.2, &mut h);
+            hash_lc::<Scalar>(&constraint.0, &mut h);
+            hash_lc::<Scalar>(&constraint.1, &mut h);
+            hash_lc::<Scalar>(&constraint.2, &mut h);
         }
 
         let mut s = String::new();
@@ -227,9 +226,9 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
 
     pub fn which_is_unsatisfied(&self) -> Option<&str> {
         for &(ref a, ref b, ref c, ref path) in &self.constraints {
-            let mut a = eval_lc::<E>(a, &self.inputs, &self.aux);
-            let b = eval_lc::<E>(b, &self.inputs, &self.aux);
-            let c = eval_lc::<E>(c, &self.inputs, &self.aux);
+            let mut a = eval_lc::<Scalar>(a, &self.inputs, &self.aux);
+            let b = eval_lc::<Scalar>(b, &self.inputs, &self.aux);
+            let c = eval_lc::<Scalar>(c, &self.inputs, &self.aux);
 
             a.mul_assign(&b);
 
@@ -249,7 +248,7 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
         self.constraints.len()
     }
 
-    pub fn set(&mut self, path: &str, to: E::Fr) {
+    pub fn set(&mut self, path: &str, to: Scalar) {
         match self.named_objects.get(path) {
             Some(&NamedObject::Var(ref v)) => match v.get_unchecked() {
                 Index::Input(index) => self.inputs[index].0 = to,
@@ -263,7 +262,7 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
         }
     }
 
-    pub fn verify(&self, expected: &[E::Fr]) -> bool {
+    pub fn verify(&self, expected: &[Scalar]) -> bool {
         assert_eq!(expected.len() + 1, self.inputs.len());
 
         for (a, b) in self.inputs.iter().skip(1).zip(expected.iter()) {
@@ -279,7 +278,7 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
         self.inputs.len()
     }
 
-    pub fn get_input(&mut self, index: usize, path: &str) -> E::Fr {
+    pub fn get_input(&mut self, index: usize, path: &str) -> Scalar {
         let (assignment, name) = self.inputs[index].clone();
 
         assert_eq!(path, name);
@@ -287,7 +286,7 @@ impl<E: ScalarEngine> TestConstraintSystem<E> {
         assignment
     }
 
-    pub fn get(&mut self, path: &str) -> E::Fr {
+    pub fn get(&mut self, path: &str) -> Scalar {
         match self.named_objects.get(path) {
             Some(&NamedObject::Var(ref v)) => match v.get_unchecked() {
                 Index::Input(index) => self.inputs[index].0,
@@ -330,28 +329,28 @@ fn compute_path(ns: &[String], this: String) -> String {
     name
 }
 
-impl<E: ScalarEngine> ConstraintSystem<E> for TestConstraintSystem<E> {
+impl<Scalar: PrimeField> ConstraintSystem<Scalar> for TestConstraintSystem<Scalar> {
     type Root = Self;
 
-    fn new() -> TestConstraintSystem<E> {
+    fn new() -> TestConstraintSystem<Scalar> {
         let mut map = HashMap::new();
         map.insert(
             "ONE".into(),
-            NamedObject::Var(TestConstraintSystem::<E>::one()),
+            NamedObject::Var(TestConstraintSystem::<Scalar>::one()),
         );
 
         TestConstraintSystem {
             named_objects: map,
             current_namespace: vec![],
             constraints: vec![],
-            inputs: vec![(E::Fr::one(), "ONE".into())],
+            inputs: vec![(Scalar::one(), "ONE".into())],
             aux: vec![],
         }
     }
 
     fn alloc<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        F: FnOnce() -> Result<Scalar, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -366,7 +365,7 @@ impl<E: ScalarEngine> ConstraintSystem<E> for TestConstraintSystem<E> {
 
     fn alloc_input<F, A, AR>(&mut self, annotation: A, f: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<E::Fr, SynthesisError>,
+        F: FnOnce() -> Result<Scalar, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -383,9 +382,9 @@ impl<E: ScalarEngine> ConstraintSystem<E> for TestConstraintSystem<E> {
     where
         A: FnOnce() -> AR,
         AR: Into<String>,
-        LA: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-        LB: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
-        LC: FnOnce(LinearCombination<E>) -> LinearCombination<E>,
+        LA: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
+        LB: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
+        LC: FnOnce(LinearCombination<Scalar>) -> LinearCombination<Scalar>,
     {
         let path = compute_path(&self.current_namespace, annotation().into());
         let index = self.constraints.len();
@@ -420,39 +419,37 @@ impl<E: ScalarEngine> ConstraintSystem<E> for TestConstraintSystem<E> {
 
 #[test]
 fn test_cs() {
-    use crate::bls::{Bls12, Fr};
-    use ff::PrimeField;
+    use blstrs::Scalar as Fr;
+    use ff::Field;
 
-    let mut cs = TestConstraintSystem::<Bls12>::new();
+    let mut cs = TestConstraintSystem::<Fr>::new();
     assert!(cs.is_satisfied());
     assert_eq!(cs.num_constraints(), 0);
     let a = cs
         .namespace(|| "a")
-        .alloc(|| "var", || Ok(Fr::from_str("10").unwrap()))
+        .alloc(|| "var", || Ok(Fr::from(10u64)))
         .unwrap();
     let b = cs
         .namespace(|| "b")
-        .alloc(|| "var", || Ok(Fr::from_str("4").unwrap()))
+        .alloc(|| "var", || Ok(Fr::from(4u64)))
         .unwrap();
-    let c = cs
-        .alloc(|| "product", || Ok(Fr::from_str("40").unwrap()))
-        .unwrap();
+    let c = cs.alloc(|| "product", || Ok(Fr::from(40u64))).unwrap();
 
     cs.enforce(|| "mult", |lc| lc + a, |lc| lc + b, |lc| lc + c);
     assert!(cs.is_satisfied());
     assert_eq!(cs.num_constraints(), 1);
 
-    cs.set("a/var", Fr::from_str("4").unwrap());
+    cs.set("a/var", Fr::from(4u64));
 
-    let one = TestConstraintSystem::<Bls12>::one();
+    let one = TestConstraintSystem::<Fr>::one();
     cs.enforce(|| "eq", |lc| lc + a, |lc| lc + one, |lc| lc + b);
 
     assert!(!cs.is_satisfied());
     assert!(cs.which_is_unsatisfied() == Some("mult"));
 
-    assert!(cs.get("product") == Fr::from_str("40").unwrap());
+    assert!(cs.get("product") == Fr::from(40u64));
 
-    cs.set("product", Fr::from_str("16").unwrap());
+    cs.set("product", Fr::from(16u64));
     assert!(cs.is_satisfied());
 
     {
