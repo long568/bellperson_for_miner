@@ -8,17 +8,12 @@ booleans and number abstractions.
 
 ## Backend
 
-There are currently two backends available for the implementation of Bls12 381:
+There is currently one backend available for the implementation of Bls12 381:
 - [`blstrs`](https://github.com/filecoin-project/blstrs) - optimized with hand tuned assembly, using [blst](https://github.com/supranational/blst)
-- [`paired`](https://github.com/filecoin-project/paired) - pure Rust implementation
-
-They can be selected at compile time with the mutually exclusive features `blst` and `pairing`. Specifying one of them is enough for a working library, no additional features need to be set.
-
-The default for now is `blst`, as the secure and audited choice.  Note that `pairing` is deprecated and may be removed in the future.
 
 ## GPU
 
-This fork contains GPU parallel acceleration to the FFT and Multiexponentation algorithms in the groth16 prover codebase under the compilation feature `gpu`, it can be used in combination with `blst` or `pairing`.
+This fork contains GPU parallel acceleration to the FFT and Multiexponentation algorithms in the groth16 prover codebase under the compilation features `cuda` and `opencl`.
 
 ### Requirements
 - NVIDIA or AMD GPU Graphics Driver
@@ -67,13 +62,32 @@ The gpu extension contains some env vars that may be set externally to this libr
     ```
 
 - `RAYON_NUM_THREADS`
-   
+
    Restricts the number of threads used in the library to roughly twice that number (best effort). In the past this was done using `BELLMAN_NUM_CPUS` which is now deprecated. The default is set to the number of logical cores reported on the machine.
-   
+
    ```rust
     // Example
     env::set_var("RAYON_NUM_THREADS", "6");
    ```
+
+ - `BELLMAN_GPU_FRAMEWORK`
+
+     Bellman can be compiled with both, OpenCL and CUDA support. When both are available, `BELLMAN_GPU_FRAMEWORK` can be used to set it to a specific one, either `cuda` or `opencl`.
+
+    ```rust
+    // Example
+    env::set_var("BELLMAN_GPU_FRAMEWORK", "opencl");
+    ```
+
+ - `BELLMAN_CUDA_NVCC_ARGS`
+
+     By default the CUDA kernel is compiled for several architectures, which may take a long time. `BELLMAN_CUDA_NVCC_ARGS` can be used to override those arguments. The input and output file will still be automatically set.
+
+    ```rust
+    // Example for compiling the kernel for only the Turing architecture
+    env::set_var("BELLMAN_CUDA_NVCC_ARGS", "--fatbin --gpu-architecture=sm_75 --generate-code=arch=compute_75,code=sm_75");
+    ```
+
 
 #### Supported / Tested Cards
 
@@ -108,27 +122,25 @@ Depending on the size of the proof being passed to the gpu for work, certain car
 
 ### Running Tests
 
-To run using the `pairing` backend, you can use:
-
 ```bash
-RUSTFLAGS="-C target-cpu=native" cargo test --release --all --no-default-features --features pairing
+RUSTFLAGS="-C target-cpu=native" cargo test --release --all
 ```
 
-To run using both the `gpu` and `blst` backend, you can use:
+To run using CUDA and OpenCL, you can use:
 
 ```bash
-RUSTFLAGS="-C target-cpu=native" cargo test --release --all --no-default-features --features gpu,blst
+RUSTFLAGS="-C target-cpu=native" cargo test --release --all --features cuda,opencl
 ```
 
 To run the multiexp_consistency test you can use:
 
 ```bash
-RUST_LOG=info cargo test --features gpu -- --exact multiexp::gpu_multiexp_consistency --nocapture
+RUST_LOG=info cargo test --features cuda,opencl -- --exact multiexp::gpu_multiexp_consistency --nocapture
 ```
 
 ### Considerations
 
-Bellperson uses `rust-gpu-tools` as its OpenCL backend, therefore you may see a
+Bellperson uses `rust-gpu-tools` as its CUDA/OpenCL backend, therefore you may see a
 directory named `~/.rust-gpu-tools` in your home folder, which contains the
 compiled binaries of OpenCL kernels used in this repository.
 
