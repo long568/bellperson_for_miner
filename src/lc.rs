@@ -6,7 +6,7 @@ use crate::multiexp::DensityTracker;
 
 /// Represents a variable in our constraint system.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Variable(pub(crate) Index);
+pub struct Variable(pub Index);
 
 impl Variable {
     /// This constructs a variable with an arbitrary index.
@@ -32,13 +32,13 @@ pub enum Index {
 
 /// This represents a linear combination of some variables, with coefficients
 /// in the scalar field of a pairing-friendly elliptic curve group.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LinearCombination<Scalar: PrimeField> {
     inputs: Indexer<Scalar>,
     aux: Indexer<Scalar>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct Indexer<T> {
     /// Stores a list of `T` indexed by the number in the first slot of the tuple.
     values: Vec<(usize, T)>,
@@ -160,12 +160,12 @@ impl<Scalar: PrimeField> LinearCombination<Scalar> {
     }
 
     #[inline]
-    pub(crate) fn iter_inputs(&self) -> impl Iterator<Item = (&usize, &Scalar)> + '_ {
+    pub fn iter_inputs(&self) -> impl Iterator<Item = (&usize, &Scalar)> + '_ {
         self.inputs.iter()
     }
 
     #[inline]
-    pub(crate) fn iter_aux(&self) -> impl Iterator<Item = (&usize, &Scalar)> + '_ {
+    pub fn iter_aux(&self) -> impl Iterator<Item = (&usize, &Scalar)> + '_ {
         self.aux.iter()
     }
 
@@ -242,7 +242,7 @@ impl<Scalar: PrimeField> LinearCombination<Scalar> {
         self.inputs.is_empty() && self.aux.is_empty()
     }
 
-    pub(crate) fn eval(
+    pub fn eval(
         &self,
         mut input_density: Option<&mut DensityTracker>,
         mut aux_density: Option<&mut DensityTracker>,
