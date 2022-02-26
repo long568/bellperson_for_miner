@@ -156,10 +156,11 @@ pub mod util_cs;
 mod lc;
 pub use lc::{Index, LinearCombination, Variable};
 mod constraint_system;
-pub use constraint_system::{Circuit, ConstraintSystem, SynthesisError};
+pub use constraint_system::{Circuit, ConstraintSystem, Namespace, SynthesisError};
 
-const BELLMAN_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BELLMAN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg(feature = "groth16")]
 pub(crate) fn le_bytes_to_u64s(le_bytes: &[u8]) -> Vec<u64> {
     use std::convert::TryInto;
 
